@@ -186,6 +186,19 @@ canvas#gameCanvas { position: fixed; inset: 0; display: block; width: 100%; heig
 .menu-panel h2 { font-size: 28px; margin-bottom: 16px; color: #fff; }
 .menu-panel.small .big-btn { margin-top: 10px; }
 
+/* === 点击继续提示(不阻断战斗) === */
+.click-hint {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 8, 14, 0.45);
+  cursor: pointer;
+}
+.click-hint-box { text-align: center; pointer-events: none; }
+.click-icon { font-size: 56px; margin-bottom: 14px; animation: pulse 1.4s ease-in-out infinite; }
+.click-hint-box p { font-size: 22px; font-weight: 600; color: #fff; text-shadow: 0 2px 8px #000; }
+.click-hint-box .click-sub { margin-top: 8px; font-size: 13px; font-weight: 400; color: #aebfd4; }
+@keyframes pulse { 0%,100% { transform: scale(1); opacity: .85; } 50% { transform: scale(1.12); opacity: 1; } }
+
 #resultStats { margin: 18px 0; color: #b0c4dc; font-size: 14px; line-height: 1.8; }
 #resultTitle.victory { color: #f5b942; }
 #resultTitle.defeat { color: #ff6b6b; }

@@ -47,7 +47,7 @@ function setupRanges() {
 function showOverlay(el) { el.classList.remove('hidden'); }
 function hideOverlay(el) { el.classList.add('hidden'); }
 function hideAll() {
-  ['menu','loading','pauseMenu','deadScreen','resultScreen'].forEach(id => hideOverlay($(id)));
+  ['menu','loading','pauseMenu','deadScreen','resultScreen','clickHint'].forEach(id => hideOverlay($(id)));
 }
 
 function showLoading(text) {
@@ -70,6 +70,11 @@ function bindGameCallbacks(g) {
     $('weaponSide').className = `side-tag ${s.weaponSide}`;
     $('scoreA').textContent = s.scoreA;
     $('scoreB').textContent = s.scoreB;
+    // 复活后自动关闭死亡画面
+    if (!s.dead && !$('deadScreen').classList.contains('hidden')) {
+      hideOverlay($('deadScreen'));
+      if (!game.pointerLocked && !game.paused) showOverlay($('clickHint'));
+    }
   };
   g.onKill = (info) => {
     const feed = $('killFeed');
@@ -81,6 +86,7 @@ function bindGameCallbacks(g) {
     setTimeout(() => item.remove(), 4000);
   };
   g.onDeath = (info) => {
+    hideOverlay($('clickHint'));
     showOverlay($('deadScreen'));
     $('deadBy').textContent = info.by === 'remote' ? '被远程玩家击杀' : (info.by === 'bot' ? '被人机击杀' : '阵亡');
     let t = 3;
@@ -100,10 +106,18 @@ function bindGameCallbacks(g) {
     // 简易:命中marker已在game画粒子
   };
   g.onPause = () => {
+    hideOverlay($('clickHint'));
     showOverlay($('pauseMenu'));
   };
   g.onResume = () => {
     hideOverlay($('pauseMenu'));
+  };
+  g.onLockLost = () => {
+    // 战斗不暂停,仅提示玩家点击重新锁定
+    if (!game.paused && !game.player.dead) showOverlay($('clickHint'));
+  };
+  g.onLockAcquire = () => {
+    hideOverlay($('clickHint'));
   };
   g.onGameEnd = (winner, kills) => {
     showOverlay($('resultScreen'));
@@ -143,7 +157,10 @@ async function startSingle() {
   bindGameCallbacks(game);
   showHUD();
   game.start(opts);
+  window.__game = game; // 调试钩子
   hideOverlay($('loading'));
+  // 首次进入:提示点击锁定鼠标(战斗已在进行,人机正在接近)
+  showOverlay($('clickHint'));
 }
 
 // === 创建房间(房主) ===
@@ -183,6 +200,7 @@ async function startHost() {
           showHUD();
           game.start(opts);
           hideOverlay($('loading'));
+          showOverlay($('clickHint'));
         }, 100);
       }, 500);
     };
@@ -215,11 +233,12 @@ async function startJoin() {
       secondaryId: $('secondaryWeaponJoin').value,
       isHost: false,
       netManager,
-      spawn: { x: 22, y: 0, z: 18 },
+      spawn: { x: 24, y: 0, z: 20 },
     };
     game = new Game(canvas);
     bindGameCallbacks(game);
     game.start(opts);
+    showOverlay($('clickHint'));
   } catch (e) {
     showOverlay($('menu'));
     $('joinHint').textContent = '加入失败: ' + (e.message || e);
@@ -241,7 +260,11 @@ function setupPause() {
   });
   $('respawnBtn').addEventListener('click', () => {
     hideOverlay($('deadScreen'));
-    // 玩家自动复活由game控制
+    if (game && !game.pointerLocked) showOverlay($('clickHint'));
+  });
+  // 点击提示层 → 请求鼠标锁定(点击会落到该遮罩上,而非 canvas)
+  $('clickHint').addEventListener('click', () => {
+    if (game) game.requestLock();
   });
   $('rematchBtn').addEventListener('click', () => {
     hideAll();

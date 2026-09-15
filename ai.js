@@ -1,24 +1,38 @@
 // ai.js — 人机 AI
+// 状态机: PATROL(巡逻) → APPROACH(听声接近,无视线) → ENGAGE(看见,开火) ; RELOAD
+// 移动: 贴墙滑动 + 卡住绕行,保证能绕过月台等长障碍
 import * as THREE from 'three';
 import { WEAPONS, AI_DIFFICULTY, PLAYER } from './config.js';
 
 const BOT_COLOR_A = 0x3a6ec9;
 const BOT_COLOR_B = 0xc94f3a;
 
-// AI 巡逻点(随机选择)
+// 巡逻点:全部位于地面可行区域(外侧走廊 / 地图两端绕行带 / 中轴开阔地)
 const WAYPOINTS = [
-  new THREE.Vector3(-15, 0, -10),
-  new THREE.Vector3(-8, 0, -5),
-  new THREE.Vector3(0, 0, 0),
-  new THREE.Vector3(8, 0, 5),
-  new THREE.Vector3(15, 0, 10),
-  new THREE.Vector3(-12, 0, 8),
-  new THREE.Vector3(12, 0, -8),
-  new THREE.Vector3(-6, 4, 0),  // 天桥上
-  new THREE.Vector3(6, 4, 0),
-  new THREE.Vector3(-20, 0, -15),
-  new THREE.Vector3(20, 0, 15),
+  // 右侧走廊(月台与外墙之间)
+  new THREE.Vector3(24, 0, -32),
+  new THREE.Vector3(24, 0, -12),
+  new THREE.Vector3(24, 0, 12),
+  new THREE.Vector3(24, 0, 32),
+  // 左侧走廊
+  new THREE.Vector3(-24, 0, -32),
+  new THREE.Vector3(-24, 0, -12),
+  new THREE.Vector3(-24, 0, 12),
+  new THREE.Vector3(-24, 0, 32),
+  // 地图两端(月台外侧,可横穿铁轨)
+  new THREE.Vector3(0, 0, -36),
+  new THREE.Vector3(0, 0, 36),
+  // 中轴开阔地(集装箱之间的缝隙)
+  new THREE.Vector3(0, 0, -20),
+  new THREE.Vector3(0, 0, 20),
+  new THREE.Vector3(0, 0, -8),
+  new THREE.Vector3(0, 0, 8),
+  new THREE.Vector3(-5, 0, -6),
+  new THREE.Vector3(5, 0, 6),
 ];
+
+const VIEW_RANGE = 45;    // 看见敌人的距离(需视线)
+const HEAR_RANGE = 75;    // "听声"距离:无视线也会主动压过去
 
 export class Bot {
   constructor(scene, { id, team, difficulty, spawn, primaryId, name }) {
@@ -50,6 +64,16 @@ export class Bot {
     this.lastHitFlash = 0;
     this.bobPhase = Math.random() * Math.PI * 2;
 
+    // 绕行状态
+    this.stuckT = 0;        // 完全无法移动的累计时间
+    this.detourT = 0;       // 绕行剩余时间
+    this.detourDir = 1;     // 绕行方向
+    this.strafeSign = Math.random() < 0.5 ? 1 : -1;
+    this.strafeSwapT = 1 + Math.random() * 2;
+    // 垂直运动(跳月台)
+    this.velY = 0;
+    this.onGround = true;
+
     // 视觉模型
     this.mesh = new THREE.Group();
     const color = team === 'A' ? BOT_COLOR_A : BOT_COLOR_B;
@@ -71,7 +95,14 @@ export class Bot {
     this.gunMesh.position.set(0.35, 1.1, 0.3);
     this.mesh.add(this.gunMesh);
 
-    // 名牌(可选,简化为不可见)
+    // 头顶敌方标识(红色菱形,Basic材质不受光照影响,雾中也醒目)
+    this.marker = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.22),
+      new THREE.MeshBasicMaterial({ color: 0xff3333 })
+    );
+    this.marker.position.y = 2.35;
+    this.mesh.add(this.marker);
+
     this.mesh.position.copy(this.position);
     scene.add(this.mesh);
 
@@ -79,6 +110,7 @@ export class Bot {
     this.aabb = new THREE.Box3();
     this.updateAABB();
 
+    this.worldColliders = [];
     this.pickWaypoint();
   }
 
@@ -88,7 +120,10 @@ export class Bot {
   }
 
   pickWaypoint() {
-    const wpt = WAYPOINTS[Math.floor(Math.random() * WAYPOINTS.length)];
+    // 倾向于选择离当前位置不太远的点,避免长距离卡住
+    const candidates = WAYPOINTS.filter(w => w.distanceTo(this.position) > 6);
+    const pool = candidates.length ? candidates : WAYPOINTS;
+    const wpt = pool[Math.floor(Math.random() * pool.length)];
     this.target.set(wpt.x, 0, wpt.z);
   }
 
@@ -107,81 +142,91 @@ export class Bot {
     this.lastHitFlash = Math.max(0, this.lastHitFlash - dt);
     this.fireCd -= dt;
     this.burstCd -= dt;
-    this.reactionT -= dt;
+    this.detourT = Math.max(0, this.detourT - dt);
+    this.strafeSwapT -= dt;
+    if (this.strafeSwapT <= 0) {
+      this.strafeSign *= -1;
+      this.strafeSwapT = 1.2 + Math.random() * 1.8;
+    }
 
     if (this.reloading) {
       this.reloadT -= dt;
       if (this.reloadT <= 0) {
         this.reloading = false;
         this.ammo = this.weapon.mag;
-      } else {
-        // 换弹中不能开火
-        this.mesh.position.copy(this.position);
-        this.updateAABB();
-        return null;
       }
+      this.syncMesh(dt);
+      return null;
     }
 
-    // 选择目标(优先可见敌人)
-    const enemy = this.findEnemy(gameState);
+    // 选择目标:可见敌人优先;否则找最近敌人"听声"
+    const visibleEnemy = this.findEnemy(gameState, VIEW_RANGE, true);
+    const anyEnemy = visibleEnemy || this.findEnemy(gameState, HEAR_RANGE, false);
 
-    if (enemy) {
+    if (visibleEnemy) {
       if (this.state !== 'ENGAGE') {
         this.reactionT = this.diff.reaction;
         this.state = 'ENGAGE';
       }
       if (this.reactionT <= 0) {
-        this.engage(enemy, dt, gameState);
+        this.engage(visibleEnemy, dt, gameState);
       } else {
-        // 反应中:瞄准但不射击
-        this.faceTo(enemy.position);
-        this.moveTowards(enemy.position, dt, false);
+        this.faceTo(visibleEnemy.position);
+        this.moveTowards(visibleEnemy.position, dt, false);
       }
+    } else if (anyEnemy) {
+      // 看不见但在听觉范围内:主动压上(滑动会绕过长障碍)
+      this.state = 'APPROACH';
+      this.faceTo(anyEnemy.position);
+      this.moveTowards(anyEnemy.position, dt, true);
+      // 接近中也顺手换弹
+      if (this.ammo < this.weapon.mag * this.diff.reloadAt) this.startReload();
     } else {
-      // 没有敌人 → 巡逻/换弹
-      if (this.ammo < this.weapon.mag * this.diff.reloadAt && !this.reloading) {
-        this.startReload();
-      }
       this.state = 'PATROL';
-      this.patrol(dt, gameState);
+      if (this.ammo < this.weapon.mag * this.diff.reloadAt) this.startReload();
+      this.patrol(dt);
     }
 
-    // 视觉
+    this.syncMesh(dt);
+    return null;
+  }
+
+  syncMesh(dt) {
     this.mesh.position.copy(this.position);
     this.mesh.rotation.y = Math.atan2(this.facing.x, this.facing.z);
-    // 走动bob
     const speed = this.velocity.length();
     if (speed > 0.1) {
-      this.bobPhase += dt * 8;
-      this.bodyMesh.position.y = 0.9 + Math.sin(this.bobPhase) * 0.04;
-      this.headMesh.position.y = 1.65 + Math.sin(this.bobPhase) * 0.04;
+      this.bobPhase += dt * 9;
+      this.bodyMesh.position.y = 0.9 + Math.abs(Math.sin(this.bobPhase)) * 0.05;
+      this.headMesh.position.y = 1.65 + Math.abs(Math.sin(this.bobPhase)) * 0.05;
     }
-    // 受伤红色flash
+    // 头顶标识旋转
+    this.marker.rotation.y += dt * 2.5;
+    this.marker.position.y = 2.35 + Math.sin(performance.now() * 0.004 + this.id) * 0.08;
+    // 受伤红闪
     if (this.lastHitFlash > 0) {
       this.bodyMesh.material.emissive.setRGB(0.5, 0, 0);
     } else {
       this.bodyMesh.material.emissive.setRGB(0, 0, 0);
     }
-
     this.updateAABB();
-    return null;
   }
 
-  findEnemy(gameState) {
-    // 找最近的非本队的活着的actor
+  // 找最近敌人;requireLOS=true 时要求视线
+  findEnemy(gameState, range, requireLOS) {
     let best = null, bestDist = Infinity;
     const check = (a) => {
       if (!a || a.dead) return;
-      if (a.team === this.team) return;
+      if (a === this || a.team === this.team) return;
       if (a.invulnT > 0) return;
       const d = a.position.distanceTo(this.position);
-      if (d > 35) return; // 视野距离
-      // 视线检测
-      if (!this.hasLineOfSight(a.position, gameState)) return;
+      if (d > range) return;
+      if (requireLOS && !this.hasLineOfSight(a.position, gameState)) return;
       if (d < bestDist) { best = a; bestDist = d; }
     };
-    check(gameState.player);
-    if (gameState.bots) gameState.bots.forEach(b => b !== this && check(b));
+    if (gameState.player) check(gameState.player);
+    if (gameState.bots) gameState.bots.forEach(b => check(b));
+    if (gameState.remotePlayer) check(gameState.remotePlayer);
     return best;
   }
 
@@ -197,8 +242,7 @@ export class Bot {
     const tmp = new THREE.Vector3();
     for (const c of gameState.worldColliders) {
       if (gameState.raycaster.ray.intersectBox(c, tmp)) {
-        const d = origin.distanceTo(tmp);
-        if (d < dist) return false;
+        if (origin.distanceTo(tmp) < dist) return false;
       }
     }
     return true;
@@ -207,70 +251,143 @@ export class Bot {
   faceTo(pos) {
     const dx = pos.x - this.position.x;
     const dz = pos.z - this.position.z;
-    this.facing.set(dx, 0, dz).normalize();
+    if (dx * dx + dz * dz > 0.001) this.facing.set(dx, 0, dz).normalize();
   }
 
-  moveTowards(target, dt, run) {
+  // 朝目标点移动(贴墙滑动 + 卡住绕行 + 矮障碍跳跃)
+  moveTowards(pos, dt, run) {
     const speed = (run ? PLAYER.runSpeed : PLAYER.walkSpeed) * this.diff.moveSpeed;
-    const dx = target.x - this.position.x;
-    const dz = target.z - this.position.z;
+    let dx = pos.x - this.position.x;
+    let dz = pos.z - this.position.z;
     const dist = Math.hypot(dx, dz);
-    if (dist < 0.5) return;
-    const vx = (dx / dist) * speed;
-    const vz = (dz / dist) * speed;
-    const move = new THREE.Vector3(vx * dt, 0, vz * dt);
-    if (!this.collidesAt(this.position.clone().add(move), this.worldColliders)) {
-      this.position.add(move);
-      this.facing.set(dx, 0, dz).normalize();
-    } else {
-      // 卡住 → 换waypoint
-      this.pickWaypoint();
+    if (dist < 0.6) {
+      this.velocity.set(0, 0, 0);
+      this.updateVertical(dt);
+      return true;
     }
-    this.velocity.set(vx, 0, vz);
+    let nx = dx / dist, nz = dz / dist;
+
+    // 卡住时偏转方向绕行(绕月台等长墙)
+    if (this.detourT > 0) {
+      const a = this.detourDir * 1.25;
+      const cos = Math.cos(a), sin = Math.sin(a);
+      const rx = nx * cos - nz * sin;
+      const rz = nx * sin + nz * cos;
+      nx = rx; nz = rz;
+    }
+
+    // 地面遇矮障碍(月台0.8m) → 起跳越过
+    if (this.onGround) {
+      const aheadBlocked = this.blockedAt3(this.position.x + nx * 0.7, this.position.y, this.position.z + nz * 0.7);
+      const airClear = !this.blockedAt3(this.position.x + nx * 0.7, this.position.y + 0.9, this.position.z + nz * 0.7);
+      if (aheadBlocked && airClear) {
+        this.velY = 6.4;
+        this.onGround = false;
+      }
+    }
+
+    const mx = nx * speed * dt;
+    const mz = nz * speed * dt;
+    const moved = this.slideMove(mx, mz);
+
+    this.facing.set(dx, 0, dz).normalize();
+
+    if (!moved) {
+      this.stuckT += dt;
+      this.velocity.set(0, 0, 0);
+      if (this.stuckT > 0.4 && this.detourT <= 0) {
+        // 启动绕行,随机选一侧
+        this.detourDir = Math.random() < 0.5 ? 1 : -1;
+        this.detourT = 2.2;
+        this.stuckT = 0;
+      }
+    } else {
+      this.stuckT = 0;
+      this.velocity.set(nx * speed, 0, nz * speed);
+    }
+    this.updateVertical(dt);
+    return moved;
   }
 
-  patrol(dt, gameState) {
-    const dx = this.target.x - this.position.x;
-    const dz = this.target.z - this.position.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist < 1.5) this.pickWaypoint();
+  // 重力 + 两档台阶着陆(地面0 / 月台顶0.8)
+  updateVertical(dt) {
+    const p = this.position;
+    this.velY -= PLAYER.gravity * dt;
+    const ny = p.y + this.velY * dt;
+    if (this.velY <= 0) {
+      if (ny <= 0.001) {
+        p.y = 0; this.velY = 0; this.onGround = true;
+      } else if (!this.blockedAt3(p.x, ny, p.z)) {
+        // 空中
+        p.y = ny; this.onGround = false;
+      } else {
+        // 落到表面:吸附到最近的可行走高度
+        if (ny <= 0.85 && !this.blockedAt3(p.x, 0.8, p.z)) {
+          p.y = 0.8;
+        } else {
+          p.y = 0;
+        }
+        this.velY = 0; this.onGround = true;
+      }
+    } else {
+      // 上升
+      if (!this.blockedAt3(p.x, ny, p.z)) { p.y = ny; this.onGround = false; }
+      else { this.velY = 0; }
+    }
+  }
+
+  // 滑动:先整体移动,失败则分轴滑动
+  slideMove(mx, mz) {
+    const p = this.position;
+    if (!this.blockedAt3(p.x + mx, p.y, p.z + mz)) {
+      p.x += mx; p.z += mz;
+      return true;
+    }
+    let moved = false;
+    if (mx !== 0 && !this.blockedAt3(p.x + mx, p.y, p.z)) { p.x += mx; moved = true; }
+    if (mz !== 0 && !this.blockedAt3(p.x, p.y, p.z + mz)) { p.z += mz; moved = true; }
+    return moved;
+  }
+
+  patrol(dt) {
+    const dist = this.target.distanceTo(this.position);
+    if (dist < 1.8) this.pickWaypoint();
     this.moveTowards(this.target, dt, false);
   }
 
   engage(enemy, dt, gameState) {
     const dist = this.position.distanceTo(enemy.position);
-    // 保持距离
-    const ideal = this.weapon.type === 'sniper' ? 18 : 10;
-    if (dist > ideal + 2) {
+    const ideal = this.weapon.type === 'sniper' ? 20 : 11;
+
+    if (!this.hasLineOfSight(enemy.position, gameState)) {
+      // 交火中丢失视线 → 压上去
       this.moveTowards(enemy.position, dt, true);
-    } else if (dist < ideal - 2) {
-      // 后撤
+    } else if (dist > ideal + 2) {
+      this.moveTowards(enemy.position, dt, true);
+    } else if (dist < ideal - 3) {
       const back = new THREE.Vector3().subVectors(this.position, enemy.position).setY(0).normalize();
-      const tgt = this.position.clone().add(back.multiplyScalar(3));
-      this.moveTowards(tgt, dt, true);
+      this.moveTowards(this.position.clone().add(back.multiplyScalar(3)), dt, true);
     } else {
-      // 横向移动(左右晃)
-      const right = new THREE.Vector3().crossVectors(this.facing, new THREE.Vector3(0,1,0)).normalize();
-      const tgt = this.position.clone().add(right.multiplyScalar(Math.sin(performance.now()*0.002) * 2));
-      this.moveTowards(tgt, dt, false);
+      // 横向晃动(直接给切向位移,避免每帧重算目标点)
+      const right = new THREE.Vector3(-this.facing.z, 0, this.facing.x);
+      this.slideMove(
+        right.x * this.strafeSign * PLAYER.walkSpeed * this.diff.moveSpeed * 0.6 * dt,
+        right.z * this.strafeSign * PLAYER.walkSpeed * this.diff.moveSpeed * 0.6 * dt
+      );
+      this.velocity.set(right.x * this.strafeSign, 0, right.z * this.strafeSign).multiplyScalar(PLAYER.walkSpeed);
     }
     this.faceTo(enemy.position);
 
-    // 换弹检查
-    if (this.ammo <= 0 && !this.reloading) {
-      this.startReload();
-      return;
-    }
-    if (this.ammo < this.weapon.mag * 0.25 && !this.reloading && Math.random() < 0.5) {
+    if (this.ammo <= 0 && !this.reloading) { this.startReload(); return; }
+    if (this.ammo < this.weapon.mag * 0.25 && !this.reloading && this.burstLeft <= 0 && Math.random() < 0.3) {
       this.startReload();
       return;
     }
 
-    // 开火
     if (this.fireCd <= 0 && this.ammo > 0 && !this.reloading) {
       if (this.burstLeft <= 0 && this.burstCd <= 0) {
         this.burstLeft = this.diff.burst;
-        this.burstCd = 0.8 + Math.random() * 0.5;
+        this.burstCd = 0.7 + Math.random() * 0.6;
       }
       if (this.burstLeft > 0) {
         this.fire(enemy, gameState);
@@ -282,10 +399,7 @@ export class Bot {
   }
 
   fire(enemy, gameState) {
-    // 视觉:tracer
     if (gameState.onBotFire) gameState.onBotFire(this, enemy.position);
-
-    // 命中判定:按精度
     const hitChance = this.diff.accuracy * this.hitModifier(enemy);
     if (Math.random() < hitChance) {
       const head = Math.random() < 0.15;
@@ -303,22 +417,22 @@ export class Bot {
   }
 
   startReload() {
-    if (this.reloading) return;
-    if (this.ammo >= this.weapon.mag) return;
+    if (this.reloading || this.ammo >= this.weapon.mag) return;
     this.reloading = true;
     this.reloadT = this.weapon.reload;
   }
 
-  collidesAt(pos, colliders) {
-    if (!colliders) return false;
+  blockedAt3(x, y, z) {
+    if (!this.worldColliders) return false;
     const radius = 0.4;
-    const box = new THREE.Box3(
-      new THREE.Vector3(pos.x - radius, 0.1, pos.z - radius),
-      new THREE.Vector3(pos.x + radius, 1.9, pos.z + radius)
-    );
-    for (const c of colliders) {
-      if (c.intersectsBox(box)) return true;
+    // +0.02 皮肤间隙,避免盒底恰好贴着表面时被误判为碰撞
+    const min = new THREE.Vector3(x - radius, y + 0.02, z - radius);
+    const max = new THREE.Vector3(x + radius, y + 1.85, z + radius);
+    for (const c of this.worldColliders) {
+      if (c.intersectsBox(_tmpBox.set(min, max))) return true;
     }
+    // 地图边界
+    if (x < -36.5 || x > 36.5 || z < -36.5 || z > 36.5) return true;
     return false;
   }
 
@@ -330,8 +444,8 @@ export class Bot {
       this.die(gameState);
       return true;
     }
-    // 受伤切到 ENGAGE 状态
     this.state = 'ENGAGE';
+    this.reactionT = Math.min(this.reactionT, this.diff.reaction * 0.4);
     return false;
   }
 
@@ -349,9 +463,14 @@ export class Bot {
     this.ammo = this.weapon.mag;
     this.reloading = false;
     this.state = 'PATROL';
+    this.stuckT = 0; this.detourT = 0;
     const spawns = gameState.spawnPoints[this.team];
     const p = spawns[Math.floor(Math.random() * spawns.length)];
     this.position.set(p.x, 0, p.z);
+    this.velocity.set(0, 0, 0);
+    this.velY = 0;
+    this.onGround = true;
+    this.stuckT = 0; this.detourT = 0;
     this.mesh.visible = true;
     this.mesh.position.copy(this.position);
     this.updateAABB();
@@ -363,5 +482,9 @@ export class Bot {
     this.bodyMesh.geometry.dispose();
     this.headMesh.geometry.dispose();
     this.gunMesh.geometry.dispose();
+    this.marker.geometry.dispose();
+    this.marker.material.dispose();
   }
 }
+
+const _tmpBox = new THREE.Box3();

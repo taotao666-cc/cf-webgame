@@ -280,15 +280,21 @@ export class Game {
   // === 控制输入 ===
   initControls() {
     this.canvas.addEventListener('click', () => {
-      if (this.running && !this.paused && !this.pointerLocked) {
-        this.canvas.requestPointerLock();
+      if (this.running && !this.paused && !this.pointerLocked && !this.player.dead) {
+        try { const p = this.canvas.requestPointerLock(); if (p && p.catch) p.catch(()=>{}); } catch(e) {}
       }
     });
     document.addEventListener('pointerlockchange', this._onPLChange = () => {
       this.pointerLocked = (document.pointerLockElement === this.canvas);
-      if (!this.pointerLocked && this.running && !this.paused && !this.ended) {
-        // 失锁 → 暂停
-        this.pause();
+      if (this.pointerLocked) {
+        if (this.onLockAcquire) this.onLockAcquire();
+      } else {
+        // 失锁不再冻结世界(否则焦点闪失/bot都会定住),只提示点击继续
+        this.mouseDown = false;
+        this.adsActive = false;
+        if (this.running && !this.ended && !this.paused && this.onLockLost) {
+          this.onLockLost();
+        }
       }
     });
     document.addEventListener('mousemove', this._onMouseMove = (e) => {
@@ -313,7 +319,8 @@ export class Game {
       if (e.code === 'KeyR') this.reload();
       if (e.code === 'Digit1') this.switchWeapon('primary');
       if (e.code === 'Digit2') this.switchWeapon('secondary');
-      if (e.code === 'Escape' && this.running && !this.ended) {
+      // Esc:未锁定时切换暂停菜单(锁定时 Esc 由浏览器退锁,走失锁提示)
+      if (e.code === 'Escape' && this.running && !this.ended && !this.pointerLocked) {
         if (this.paused) this.resume(); else this.pause();
       }
     });
@@ -572,6 +579,7 @@ export class Game {
         this.player.respawnT = PLAYER.respawnTime;
         this.player.deaths++;
         died = true;
+        if (document.pointerLockElement) document.exitPointerLock();
         if (this.onDeath) this.onDeath({ by: attackerId });
       }
     } else if (target === this.remotePlayer) {
@@ -674,6 +682,8 @@ export class Game {
     requestAnimationFrame(this._loop);
     if (!this.running) return;
     const dt = Math.min(this.clock.getDelta(), 0.05);
+    this._tickCount = (this._tickCount || 0) + 1;
+    this._gameTime = (this._gameTime || 0) + dt;
 
     if (!this.paused && !this.ended) {
       this.updatePlayer(dt);
@@ -1142,7 +1152,14 @@ export class Game {
     this.paused = false;
     this.clock.getDelta(); // 重置
     if (this.onResume) this.onResume();
-    if (this.running && !this.pointerLocked) this.canvas.requestPointerLock();
+    if (this.running && !this.pointerLocked) {
+      try { const p = this.canvas.requestPointerLock(); if (p && p.catch) p.catch(()=>{}); } catch(e) {}
+    }
+  }
+  requestLock() {
+    if (this.running && !this.paused && !this.pointerLocked) {
+      try { const p = this.canvas.requestPointerLock(); if (p && p.catch) p.catch(()=>{}); } catch(e) {}
+    }
   }
   quit() {
     this.running = false;
