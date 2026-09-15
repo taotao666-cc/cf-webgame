@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>豆包枪战 · 火车站</title>
+<link rel="stylesheet" href="css/style.css" />
+<!-- PeerJS: 普通 script 引入,挂在 window.Peer -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<!-- 主菜单 -->
+<div id="menu" class="overlay">
+  <div class="menu-panel">
+    <h1 class="title">豆包枪战 <span class="subtitle">· 火车站 ·</span></h1>
+    <p class="tagline">美式中式经典武器 · 人机 · P2P 联机</p>
+
+    <div class="menu-tabs">
+      <button class="tab active" data-tab="single">单人 · 人机</button>
+      <button class="tab" data-tab="host">联机 · 创建房间</button>
+      <button class="tab" data-tab="join">联机 · 加入房间</button>
+    </div>
+
+    <!-- 单人面板 -->
+    <div class="tab-panel active" id="panel-single">
+      <label>主武器
+        <select id="primaryWeapon"></select>
+      </label>
+      <label>副武器
+        <select id="secondaryWeapon"></select>
+      </label>
+      <label>难度
+        <select id="difficulty">
+          <option value="easy">简单</option>
+          <option value="normal" selected>普通</option>
+          <option value="hard">困难</option>
+        </select>
+      </label>
+      <label>人机数量
+        <input id="botCount" type="range" min="1" max="6" value="3" />
+        <span id="botCountVal" class="rangeval">3</span>
+      </label>
+      <label>击杀上限
+        <input id="killLimit" type="range" min="10" max="50" step="5" value="30" />
+        <span id="killLimitVal" class="rangeval">30</span>
+      </label>
+      <button id="startSingle" class="big-btn">开始战斗</button>
+    </div>
+
+    <!-- 房主面板 -->
+    <div class="tab-panel" id="panel-host">
+      <label>主武器 <select id="primaryWeaponHost"></select></label>
+      <label>副武器 <select id="secondaryWeaponHost"></select></label>
+      <label>击杀上限
+        <input id="killLimitHost" type="range" min="10" max="50" step="5" value="30" />
+        <span id="killLimitHostVal" class="rangeval">30</span>
+      </label>
+      <button id="startHost" class="big-btn">创建房间</button>
+      <div id="roomInfo" class="room-info hidden">
+        <p>你的房间码(发给好友):</p>
+        <div class="room-code" id="roomCode">------</div>
+        <p class="link-label">分享链接:</p>
+        <input id="shareLink" readonly />
+        <button id="copyLink" class="small-btn">复制链接</button>
+        <p class="hint" id="hostHint">等待好友加入...</p>
+      </div>
+    </div>
+
+    <!-- 加入面板 -->
+    <div class="tab-panel" id="panel-join">
+      <label>主武器 <select id="primaryWeaponJoin"></select></label>
+      <label>副武器 <select id="secondaryWeaponJoin"></select></label>
+      <label>房间码
+        <input id="joinCode" placeholder="输入 6 位房间码" maxlength="6" />
+      </label>
+      <button id="startJoin" class="big-btn">加入并开始</button>
+      <p class="hint" id="joinHint"></p>
+    </div>
+
+    <div class="controls-hint">
+      <p>WASD 移动 · Shift 跑 · Space 跳 · 鼠标视角 · 左键开火 · 右键瞄准 · R 换弹 · 1/2 切武器 · Esc 暂停</p>
+    </div>
+  </div>
+</div>
+
+<!-- 载入提示 -->
+<div id="loading" class="overlay hidden">
+  <div class="loader"></div>
+  <p id="loadingText">载入中...</p>
+</div>
+
+<!-- 游戏画布 -->
+<canvas id="gameCanvas"></canvas>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <!-- 顶部比分 -->
+  <div id="scoreboard">
+    <div class="team a">
+      <span class="team-name">A · 我方</span>
+      <span id="scoreA">0</span>
+    </div>
+    <div class="vs">VS</div>
+    <div class="team b">
+      <span id="scoreB">0</span>
+      <span class="team-name">B · 敌方</span>
+    </div>
+  </div>
+
+  <!-- 左下血量 -->
+  <div id="healthBox">
+    <div class="hp-label">生命</div>
+    <div class="hp-bar"><div id="hpFill"></div></div>
+    <div id="hpText">100</div>
+  </div>
+
+  <!-- 右下弹药 -->
+  <div id="ammoBox">
+    <div id="weaponName">M4A1</div>
+    <div id="ammoText"><span id="ammoMag">30</span> / <span id="ammoReserve">90</span></div>
+    <div id="weaponSide" class="side-tag">US</div>
+  </div>
+
+  <!-- 中心准星 -->
+  <div id="crosshair">
+    <div class="ch ch-t"></div>
+    <div class="ch ch-b"></div>
+    <div class="ch ch-l"></div>
+    <div class="ch ch-r"></div>
+  </div>
+
+  <!-- 击杀提示 -->
+  <div id="killFeed"></div>
+
+  <!-- 被击中红屏 -->
+  <div id="hitFlash"></div>
+
+  <!-- 状态提示(换弹/低弹) -->
+  <div id="statusHint"></div>
+
+  <!-- 联机断线 -->
+  <div id="netStatus" class="hidden"></div>
+</div>
+
+<!-- 暂停菜单 -->
+<div id="pauseMenu" class="overlay hidden">
+  <div class="menu-panel small">
+    <h2>已暂停</h2>
+    <button id="resumeBtn" class="big-btn">继续</button>
+    <button id="quitBtn" class="big-btn">返回主菜单</button>
+    <p class="controls-hint">Esc 也可继续</p>
+  </div>
+</div>
+
+<!-- 死亡画面 -->
+<div id="deadScreen" class="overlay hidden">
+  <div class="menu-panel small">
+    <h2 id="deadTitle">你被击杀了</h2>
+    <p id="deadBy"></p>
+    <button id="respawnBtn" class="big-btn">复活 (3)</button>
+  </div>
+</div>
+
+<!-- 结算 -->
+<div id="resultScreen" class="overlay hidden">
+  <div class="menu-panel">
+    <h2 id="resultTitle">胜利!</h2>
+    <div id="resultStats"></div>
+    <button id="rematchBtn" class="big-btn">再来一局</button>
+    <button id="toMenuBtn" class="big-btn">返回主菜单</button>
+  </div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

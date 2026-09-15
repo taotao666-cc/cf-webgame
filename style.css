@@ -1,0 +1,199 @@
+/* === 全局 === */
+* { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; color: #e8e8e8;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+canvas#gameCanvas { position: fixed; inset: 0; display: block; width: 100%; height: 100%; }
+.hidden { display: none !important; }
+
+/* === Overlay 通用 === */
+.overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 35%, #1a2230 0%, #060a10 70%);
+  backdrop-filter: blur(2px);
+}
+.menu-panel {
+  width: min(560px, 92vw); padding: 32px 28px;
+  background: linear-gradient(180deg, rgba(20,28,40,.95), rgba(10,14,20,.95));
+  border: 1px solid #2a3a52; border-radius: 14px;
+  box-shadow: 0 18px 60px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.05);
+  text-align: center;
+}
+.menu-panel.small { width: min(360px, 90vw); }
+
+.title {
+  font-size: 38px; font-weight: 800; letter-spacing: 2px;
+  background: linear-gradient(90deg, #f5b942, #ff7e3a, #f5b942);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  text-shadow: 0 2px 12px rgba(255,126,58,.3);
+}
+.subtitle { font-size: 18px; opacity: .8; font-weight: 500; }
+.tagline { margin: 8px 0 24px; color: #9fb4d0; font-size: 14px; }
+
+/* === Tabs === */
+.menu-tabs {
+  display: flex; gap: 6px; background: rgba(0,0,0,.35); padding: 4px;
+  border-radius: 10px; margin-bottom: 22px;
+}
+.tab {
+  flex: 1; padding: 10px 8px; background: transparent; border: 0;
+  color: #9fb4d0; cursor: pointer; border-radius: 7px; font-size: 13px;
+  transition: all .15s;
+}
+.tab:hover { color: #fff; }
+.tab.active { background: linear-gradient(180deg, #2d4060, #1a2840); color: #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,.5); }
+
+.tab-panel { display: none; flex-direction: column; gap: 14px; }
+.tab-panel.active { display: flex; }
+.tab-panel label { display: flex; align-items: center; justify-content: space-between;
+  font-size: 14px; color: #b0c4dc; gap: 12px; text-align: left; }
+.tab-panel select, .tab-panel input[type="text"], .tab-panel input:not([type="range"]) {
+  flex: 1; padding: 8px 10px; background: rgba(0,0,0,.4); border: 1px solid #2a3a52;
+  color: #fff; border-radius: 6px; font-size: 14px; outline: none;
+}
+.tab-panel select:focus, .tab-panel input:focus { border-color: #f5b942; }
+.tab-panel input[type="range"] { flex: 1; accent-color: #f5b942; }
+.rangeval { min-width: 30px; text-align: right; color: #f5b942; font-weight: 700; }
+
+.big-btn {
+  margin-top: 8px; padding: 14px 20px; font-size: 16px; font-weight: 700;
+  background: linear-gradient(180deg, #f5b942, #ff7e3a); border: 0; border-radius: 8px;
+  color: #1a1208; cursor: pointer; letter-spacing: 1px;
+  box-shadow: 0 4px 0 #a85a18, 0 6px 14px rgba(255,126,58,.4);
+  transition: transform .08s, box-shadow .08s;
+}
+.big-btn:hover { transform: translateY(-1px); }
+.big-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #a85a18; }
+.small-btn { padding: 8px 14px; background: #2d4060; color: #fff; border: 0;
+  border-radius: 6px; cursor: pointer; font-size: 13px; }
+.small-btn:hover { background: #3a527a; }
+
+.controls-hint {
+  margin-top: 18px; padding-top: 14px; border-top: 1px solid #1a2438;
+  font-size: 11px; color: #6a7e98; line-height: 1.6;
+}
+
+/* === 房间信息 === */
+.room-info { margin-top: 16px; padding: 16px; background: rgba(0,0,0,.4);
+  border: 1px dashed #2a3a52; border-radius: 10px; }
+.room-code {
+  font-size: 30px; font-weight: 800; letter-spacing: 8px; color: #f5b942;
+  margin: 8px 0; font-family: "Consolas", monospace;
+  text-shadow: 0 0 12px rgba(245,185,66,.4);
+}
+.link-label { font-size: 12px; color: #6a7e98; margin-top: 8px; margin-bottom: 4px; }
+.hint { font-size: 12px; color: #9fb4d0; margin-top: 6px; }
+
+/* === Loading === */
+.loader {
+  width: 56px; height: 56px; margin: 0 auto 16px;
+  border: 4px solid #2a3a52; border-top-color: #f5b942;
+  border-radius: 50%; animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#loading p { text-align: center; color: #9fb4d0; }
+
+/* === HUD === */
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 50;
+  font-family: "Consolas", "Segoe UI", monospace; }
+
+#scoreboard {
+  position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 18px; padding: 8px 22px;
+  background: rgba(10,14,20,.7); border: 1px solid #2a3a52; border-radius: 10px;
+  align-items: center;
+}
+#scoreboard .team { display: flex; flex-direction: column; align-items: center; min-width: 60px; }
+#scoreboard .team-name { font-size: 10px; color: #9fb4d0; letter-spacing: 1px; }
+#scoreboard .team.a span:last-child { color: #4fa3ff; font-size: 24px; font-weight: 800; }
+#scoreboard .team.b span:first-child { color: #ff6b6b; font-size: 24px; font-weight: 800; }
+#scoreboard .vs { color: #6a7e98; font-size: 12px; }
+
+#healthBox {
+  position: absolute; left: 28px; bottom: 28px; width: 220px;
+  background: rgba(10,14,20,.7); border: 1px solid #2a3a52; border-radius: 8px;
+  padding: 10px 12px;
+}
+.hp-label { font-size: 11px; color: #9fb4d0; margin-bottom: 4px; letter-spacing: 2px; }
+.hp-bar { height: 8px; background: #1a2438; border-radius: 4px; overflow: hidden; }
+#hpFill { height: 100%; width: 100%; background: linear-gradient(90deg, #4fff7a, #2dc96a);
+  transition: width .2s, background .2s; }
+#hpText { font-size: 22px; font-weight: 800; color: #fff; margin-top: 4px; }
+
+#ammoBox {
+  position: absolute; right: 28px; bottom: 28px; min-width: 180px;
+  background: rgba(10,14,20,.7); border: 1px solid #2a3a52; border-radius: 8px;
+  padding: 10px 14px; text-align: right;
+}
+#weaponName { font-size: 14px; font-weight: 700; color: #f5b942; letter-spacing: 1px; }
+#ammoText { font-size: 24px; font-weight: 800; color: #fff; margin-top: 2px; }
+#ammoReserve { color: #9fb4d0; }
+.side-tag { display: inline-block; font-size: 10px; padding: 2px 6px; margin-top: 2px;
+  background: #2d4060; color: #fff; border-radius: 3px; letter-spacing: 1px; }
+.side-tag.US { background: #2d4060; }
+.side-tag.CN { background: #a83838; }
+
+/* === 准星 === */
+#crosshair {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 30px; height: 30px;
+}
+#crosshair .ch { position: absolute; background: #41ff7a; box-shadow: 0 0 4px rgba(0,0,0,.8); }
+.ch-t { top: 0; left: 50%; transform: translateX(-50%); width: 2px; height: 8px; }
+.ch-b { bottom: 0; left: 50%; transform: translateX(-50%); width: 2px; height: 8px; }
+.ch-l { left: 0; top: 50%; transform: translateY(-50%); width: 8px; height: 2px; }
+.ch-r { right: 0; top: 50%; transform: translateY(-50%); width: 8px; height: 2px; }
+
+/* === 击杀提示 === */
+#killFeed {
+  position: absolute; top: 80px; right: 28px;
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
+}
+.kill-item {
+  padding: 6px 12px; background: rgba(10,14,20,.85); border-left: 3px solid #f5b942;
+  font-size: 13px; color: #fff; border-radius: 4px;
+  animation: killSlide .3s ease;
+}
+.kill-item .me { color: #f5b942; font-weight: 700; }
+.kill-item .victim { color: #ff6b6b; }
+@keyframes killSlide { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* === 红屏 === */
+#hitFlash {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, transparent 30%, rgba(255,0,0,.45) 100%);
+  opacity: 0; transition: opacity .15s;
+}
+#hitFlash.flash { opacity: 1; transition: opacity 0s; }
+
+/* === 状态提示 === */
+#statusHint {
+  position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%);
+  font-size: 16px; font-weight: 700; color: #f5b942;
+  text-shadow: 0 0 8px rgba(0,0,0,.9); opacity: 0; transition: opacity .15s;
+}
+#statusHint.show { opacity: 1; }
+
+/* === 联机状态 === */
+#netStatus {
+  position: absolute; top: 70px; left: 50%; transform: translateX(-50%);
+  padding: 8px 16px; background: rgba(255,80,80,.9); color: #fff;
+  border-radius: 6px; font-size: 13px;
+}
+
+/* === 暂停/死亡/结算复用 === */
+.menu-panel h2 { font-size: 28px; margin-bottom: 16px; color: #fff; }
+.menu-panel.small .big-btn { margin-top: 10px; }
+
+#resultStats { margin: 18px 0; color: #b0c4dc; font-size: 14px; line-height: 1.8; }
+#resultTitle.victory { color: #f5b942; }
+#resultTitle.defeat { color: #ff6b6b; }
+
+/* 移动端基本可用 */
+@media (max-width: 600px) {
+  .title { font-size: 26px; }
+  #scoreboard { gap: 10px; padding: 6px 14px; }
+  #healthBox { width: 150px; left: 14px; bottom: 14px; }
+  #ammoBox { right: 14px; bottom: 14px; min-width: 130px; }
+}
